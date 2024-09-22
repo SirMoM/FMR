@@ -41,10 +41,10 @@ pub struct Message {
     _type: i32,
     content: String,
     channel_id: String,
-    author: User,
+    pub(crate) author: User,
     pub attachments: Vec<Attachment>,
     // pub embeds: Vec<String>,
-    mentions: Vec<String>,
+    mentions: Vec<User>,
     mention_roles: Vec<String>,
     pinned: bool,
     mention_everyone: bool,
@@ -69,9 +69,9 @@ pub struct Interaction {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct User {
-    id: String,
-    username: String,
-    avatar: String,
+    pub(crate) id: String,
+    pub(crate) username: String,
+    avatar: Option<String>,
     discriminator: String,
     public_flags: i32,
     flags: i32,
@@ -88,13 +88,13 @@ pub struct Attachment {
     id: String,
     filename: String,
     size: i32,
-    url: String,
+    pub(crate) url: String,
     proxy_url: String,
-    width: i32,
-    height: i32,
+    width: Option<i32>,
+    height: Option<i32>,
     content_type: String,
-    placeholder: String,
-    placeholder_version: i32,
+    placeholder: Option<String>,
+    placeholder_version: Option<i32>,
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Reaction {
@@ -118,4 +118,80 @@ pub struct Emoji {
 pub struct CountDetails {
     burst: i32,
     normal: i32,
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageBody {
+    pub content: String,
+    pub tts: Option<bool>,
+    pub embeds: Option<Vec<Embed>>,
+    //pub components: Option<Vec<MessageComponent>>,
+    pub sticker_ids: Option<Vec<String>>, // Assuming snowflakes are represented as Strings
+    pub payload_json: Option<String>,
+    pub flags: Option<i32>,
+}
+/// Describes a field that can be used inside a message embed
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct EmbedField {
+    /// Field title
+    #[serde(rename = "name")]
+    pub title: String,
+    /// Field value
+    pub value: String,
+    /// If true, the field will be displayed on the same line as the last
+    pub inline: bool,
+}
+
+/// Describes an embed author
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct EmbedAuthor {
+    /// Author name
+    pub name: String,
+    /// String of the author
+    pub String: Option<String>,
+    /// Avatar String for the author
+    pub icon_String: Option<String>,
+}
+
+/// Describes an embed thumbnail
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbedThumbnail {
+    /// Thumbnail String
+    pub String: String,
+}
+
+/// Describes an embed image
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbedImage {
+    /// Image String
+    pub url: String,
+}
+
+/// Describes an embed footer
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct EmbedFooter {
+    /// Footer text
+    pub text: String,
+    /// Footer icon String
+    pub icon_String: Option<String>,
+}
+
+/// Describes an embed
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Embed {
+    /// The title of the embed
+    pub title: String,
+    /// The description of the embed
+    pub description: String,
+    /// The color of the embed
+    pub color: Option<u32>,
+    /// The embed author
+    pub author: Option<EmbedAuthor>,
+    /// Possible fields
+    pub fields: Option<Vec<EmbedField>>,
+    /// The thumbnail of the embed
+    pub thumbnail: Option<EmbedThumbnail>,
+    /// The image of the embed
+    pub image: Option<EmbedImage>,
+    /// The footer of the embed
+    pub footer: Option<EmbedFooter>,
 }

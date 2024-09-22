@@ -1,10 +1,17 @@
-use chrono::{Datelike, DateTime, Utc};
-use log::{debug, log};
+use std::ops::DerefMut;
+use std::slice::Iter;
+use std::thread;
+use std::time::Duration;
+use std::vec::IntoIter;
+
+use chrono::{DateTime, Datelike, Utc};
+use log::{debug, log, warn};
 use reqwest::blocking::Client;
+use reqwest::header::{ACCEPT, CONTENT_TYPE};
 
 use crate::discord_api::request::*;
 use crate::error::Error::{Generic, Static};
-use crate::models::discord::Message;
+use crate::models::discord::{Message, MessageBody};
 use crate::prelude::*;
 use crate::utils::config::Config;
 
@@ -32,14 +39,17 @@ pub trait GetMsgs {
     /// # Examples
     ///
     /// Implement the GetMsgs trait for a custom type
-    /// struct MyType; 
+    /// struct MyType;
     /// impl GetMsgs for MyType {
     /// fn get_messages(&self, after: Option<&str>, _limit: Option<i32>) -> Result<Vec<Message>> {
-    /// //Implementation goes here 
-    ///     } 
-    /// } 
+    /// //Implementation goes here
+    ///     }
+    /// }
 
-    fn get_messages(&self, after: Option<&str>, limit: Option<i32>) -> Result<Vec<Message>>;
+    fn get_messages(&self, after: Option<String>, limit: Option<i32>) -> Result<Vec<Message>>;
+}
+pub trait SendMsgs {
+    fn send_messages(&self, message_body: MessageBody) -> Result<()>;
 }
 pub struct MessageGetter {
     client: Client,
@@ -67,34 +77,66 @@ impl GetMsgs for MessageGetter {
     ///
     /// A `Result` containing a vector of `Message` structs if successful, or an `Error` if an error occurs.
     ///
-    fn get_messages(&self, after: Option<&str>, _limit: Option<i32>) -> Result<Vec<Message>> {
+    fn get_messages(&self, after: Option<String>, _limit: Option<i32>) -> Result<Vec<Message>> {
         let limit = _limit.unwrap_or(1);
         let config: &Config = Config::get();
-        let mut url: String = format!("{}/channels/{}/messages?limit={limit}", config.base_url, config.channel_id);
+        let mut url: String = format!(
+            "{}/channels/{}/messages?",
+            config.base_url, config.in_channel_id
+        );
 
         if after.is_some() {
-            let msg_id = after.unwrap();
-            url.push_str(format!("?after={msg_id}").as_str())
+            let msg_id = after.as_ref().unwrap().clone();
+            url.push_str(format!("after={msg_id}&").as_str())
         }
+        url.push_str(format!("limit={}", limit.to_string()).as_str());
+        println!("{:#?}", url);
 
         let body = request(&self.client, config.token.as_str(), url.as_str(), false)?;
 
         if body.contains("rate limited") {
-            return Err(Static("Rate limited"));
+            warn!("Get messages was rate limited!");
+            debug!("GET Messages was rate limited!");
+            thread::sleep(Duration::from_secs(1));
+            return self.get_messages(after, _limit);
         }
 
         let msgs: Vec<Message> = serde_json::from_str(body.as_str())
-            .expect(format!("Could not parse Message: {}", body).as_str());
+            .expect(format!("Could not parse Message:\n Body:\n {}", body.as_str()).as_str());
 
-        return Ok(msgs);
+        Ok(msgs)
     }
 }
 
-pub struct MessageService<C: GetMsgs> {
+impl SendMsgs for MessageGetter {
+    fn send_messages(&self, message_body: MessageBody) -> Result<()> {
+        let config: &Config = Config::get();
+        let mut url: String = format!(
+            "{}/channels/{}/messages",
+            config.base_url, config.out_channel_id
+        );
+
+        let req = self
+            .client
+            .post(url)
+            .header("Authorization", config.token.as_str())
+            .header(CONTENT_TYPE, "application/json")
+            .header(ACCEPT, "application/json")
+            .body(serde_json::to_string(&message_body).unwrap())
+            .build()?;
+
+        let res = self.client.execute(req)?;
+        println!("{:#?}", res.status());
+        println!("{:#?}", res.text());
+        Ok(())
+    }
+}
+
+pub struct MessageService<C: GetMsgs + SendMsgs> {
     pub client: C,
 }
 
-impl<C: GetMsgs> MessageService<C> {
+impl<C: GetMsgs + SendMsgs> MessageService<C> {
     pub fn new(client: C) -> Self {
         Self { client }
     }
@@ -125,29 +167,46 @@ impl<C: GetMsgs> MessageService<C> {
         /// let wanted_month = DateTime::parse_from_rfc3339("2022-01-01T00:00:00Z").unwrap();
         /// let memes = service.get_memes_for_month(&wanted_month);
         /// println!("{:#?}", memes);
-        
-
         let mut run = true;
         let mut result: Vec<Message> = Vec::new();
 
+        let mut last_msg: Option<String> = None;
+
         while run {
-            let mut page: Vec<Message> = self.client.get_messages(None, Option::from(15)).unwrap();
+            let mut page: Vec<Message> = self
+                .client
+                .get_messages(last_msg.clone(), Some(10))
+                .unwrap();
+            if page.is_empty() {
+                run = false;
+
+                break;
+            }
+
+            let oldest_msg: Message = page.first().expect("Should never happen!").clone();
             page.sort_by(|msg1, msg2| msg1.timestamp.cmp(&msg2.timestamp));
-            let timestamps: Vec<DateTime<Utc>> =
-                (&page).into_iter().map(|msg| msg.timestamp).collect();
+
+            let page_iter = page.clone().into_iter();
+            let timestamps: Vec<DateTime<Utc>> = page_iter.map(|msg| msg.timestamp).collect();
+
             timestamps.iter().enumerate().for_each(|(idx, ts)| {
                 println!("{}, {:#?}", idx, ts);
             });
 
-            let timestamp = &page.first().unwrap().timestamp;
+            let timestamp: DateTime<Utc> = oldest_msg.clone().timestamp;
+
             debug!("1. {:#?} 2. {:#?}", timestamp, wanted_month);
             debug!("{}", wanted_month.month());
+
             if timestamp.year() < wanted_month.year()
                 || (timestamp.year() == wanted_month.year()
                     && timestamp.month() > wanted_month.month())
             {
                 println!("The timestamp is older than the wanted month");
                 run = false;
+            } else {
+                let id = oldest_msg.clone().id;
+                last_msg = Some(id);
             }
 
             result.append(&mut page);
@@ -164,5 +223,9 @@ impl<C: GetMsgs> MessageService<C> {
             .collect();
 
         return filtered_result;
+    }
+
+    pub fn send_message(&self, message_body: MessageBody) {
+        self.client.send_messages(message_body);
     }
 }
